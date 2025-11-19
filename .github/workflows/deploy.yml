@@ -6,6 +6,9 @@ on:
     paths-ignore:
       - 'GEMINI.md'
       - 'README.md'
+      - 'FEATURES.md'
+  workflow_dispatch:
+    
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
@@ -37,6 +40,8 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
 
       - name: Upload artifact
         if: github.ref == 'refs/heads/main'
