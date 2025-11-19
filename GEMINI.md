@@ -112,3 +112,8 @@ This tool is not a generic calculator; it is hard-coded with the specific financ
 * Frontend Framework: React.js - Selected for its component-based architecture, allowing for efficient state management of complex, multi-year lease timelines and instant recalculations.
 * Styling Engine: Tailwind CSS - Utilized for its utility-first approach, enabling a responsive, clean, and modern UI that works seamlessly across devices.
 * Iconography: Lucide React - Provides a consistent, lightweight set of visual indicators (wrenches, calendars, dollar signs) to improve user experience and data readability.
+
+## 🛠️ Development Workflow
+
+* **Feature Branches**: Always create a new feature branch when implementing a new feature. Do not commit directly to the main branch for new features. Use a descriptive name for the branch (e.g., `feature/add-login-page`).
+* **Pull Requests**: When the feature is complete, open a Pull Request (PR) including the walkthrough to help with tracking the updates.
