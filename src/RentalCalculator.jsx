@@ -492,7 +492,7 @@ const RentalCalculator = () => {
     };
 
     return (
-        <div className="bg-gray-50 min-h-screen font-sans text-slate-800 relative">
+        <div className="min-h-screen font-sans text-slate-800 relative" style={{ backgroundImage: 'url(/gradient-bg.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
 
             {/* --- Session Manager --- */}
             <UserSessionManager
@@ -731,11 +731,12 @@ const RentalCalculator = () => {
                     </div>
 
                     {/* --- Monthly Breakdown Table --- */}
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
-                        <div className="p-6 border-b border-slate-100">
+                    <div className="rounded-xl shadow-sm border border-slate-200 overflow-hidden relative" style={{ backgroundImage: 'url(/mountain-bg.png)', backgroundSize: 'cover', backgroundPosition: 'center' }}>
+                        <div className="absolute inset-0 bg-white/85 backdrop-blur-sm"></div>
+                        <div className="p-6 border-b border-slate-100 relative z-10">
                             <h2 className="text-lg font-bold text-slate-800">Monthly Breakdown ({forecastYears * 12} Months)</h2>
                         </div>
-                        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <div className="overflow-x-auto max-h-[600px] overflow-y-auto relative z-10">
                             <table className="w-full text-sm text-left relative">
                                 <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm">
                                     <tr>
