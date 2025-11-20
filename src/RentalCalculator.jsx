@@ -1,13 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { DollarSign, Calendar, Wrench, AlertCircle, Plus, X, Home, Trash2, RefreshCw, UserPlus, Zap, Edit2, Info, Clock, Camera, Key, LogOut, CheckSquare } from 'lucide-react';
-import { GoogleOAuthProvider } from '@react-oauth/google';
+import { useGoogleLogin, googleLogout } from '@react-oauth/google';
+import axios from 'axios';
 import UserSessionManager from './components/UserSessionManager';
+import GuestBanner from './components/GuestBanner';
 
 const RentalCalculator = () => {
     // --- Global Inputs ---
     const [initialMortgage, setInitialMortgage] = useState(1500);
     const [vacancyUtilities, setVacancyUtilities] = useState(150);
     const [forecastYears, setForecastYears] = useState(3);
+
+    // --- User Session State ---
+    const [user, setUser] = useState(null);
+    const [showGuestBanner, setShowGuestBanner] = useState(true);
+    const [hasLoggedOut, setHasLoggedOut] = useState(false);
 
     // --- Date Configuration ---
     const [analysisStartMonth, setAnalysisStartMonth] = useState(12); // Default Dec
@@ -33,10 +40,72 @@ const RentalCalculator = () => {
     const [utilityOverrides, setUtilityOverrides] = useState({});
     const [mortgageUpdates, setMortgageUpdates] = useState({}); // { monthIndex: newBaseAmount }
 
+    // --- Session Persistence ---
+    useEffect(() => {
+        const storedToken = localStorage.getItem('google_token');
+        const storedProfile = localStorage.getItem('google_profile');
+        if (storedToken && storedProfile) {
+            setUser({
+                token: JSON.parse(storedToken),
+                profile: JSON.parse(storedProfile)
+            });
+            setShowGuestBanner(false);
+        }
+    }, []);
+
+    const handleLoginSuccess = async (tokenResponse) => {
+        try {
+            const userInfo = await axios.get(
+                'https://www.googleapis.com/oauth2/v3/userinfo',
+                { headers: { Authorization: `Bearer ${tokenResponse.access_token}` } },
+            );
+            const profile = userInfo.data;
+            setUser({ token: tokenResponse, profile });
+            setShowGuestBanner(false);
+
+            // Save to localStorage
+            localStorage.setItem('google_token', JSON.stringify(tokenResponse));
+            localStorage.setItem('google_profile', JSON.stringify(profile));
+        } catch (error) {
+            console.error('Failed to fetch user info:', error);
+        }
+    };
+
+    // --- Google Auth ---
+    const login = useGoogleLogin({
+        onSuccess: handleLoginSuccess,
+        onError: error => console.error('Google Login Failed:', error),
+        scope: 'https://www.googleapis.com/auth/drive.file profile email',
+    });
+
+    const handleLogout = () => {
+        googleLogout();
+        setUser(null);
+        setHasLoggedOut(true);
+        localStorage.removeItem('google_token');
+        localStorage.removeItem('google_profile');
+    };
+
     // --- Dirty State Tracking ---
     const [isDirty, setIsDirty] = useState(false);
 
     // Mark as dirty on any change
+
+    // --- Unsaved Changes Protection ---
+    useEffect(() => {
+        const handleBeforeUnload = (e) => {
+            // Warn if there are unsaved changes (for both guests and logged-in users)
+            if (isDirty) {
+                e.preventDefault();
+                const message = 'You have unsaved changes. Are you sure you want to leave?';
+                e.returnValue = message; // Required for Chrome/Edge
+                return message; // Required for some other browsers
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isDirty, user, hasLoggedOut]);
 
 
     // --- Modal State ---
@@ -133,6 +202,7 @@ const RentalCalculator = () => {
             moveOutDetails: { cleaning: 0, carpet: 0, rekey: 0, other: 0 }
         };
         setLeaseSegments([...leaseSegments, newSegment]);
+        setIsDirty(true);
     };
 
     const addNewTenant = () => {
@@ -152,11 +222,13 @@ const RentalCalculator = () => {
             moveOutDetails: { cleaning: 250, carpet: 200, rekey: 100, other: 0 }
         };
         setLeaseSegments([...leaseSegments, newSegment]);
+        setIsDirty(true);
     };
 
     const removeSegment = (id) => {
         if (leaseSegments.length > 1) {
             setLeaseSegments(leaseSegments.filter(s => s.id !== id));
+            setIsDirty(true);
         }
     };
 
@@ -164,6 +236,7 @@ const RentalCalculator = () => {
         setLeaseSegments(leaseSegments.map(s =>
             s.id === id ? { ...s, [field]: value } : s
         ));
+        setIsDirty(true);
     };
 
     const updateSegmentDate = (id, newMonth, newYear) => {
@@ -233,6 +306,7 @@ const RentalCalculator = () => {
             }
         }
         setModalConfig({ ...modalConfig, isOpen: false });
+        setIsDirty(true);
     };
 
     const updateMoveOutDetail = (key, value) => {
@@ -418,16 +492,45 @@ const RentalCalculator = () => {
     };
 
     return (
-        <GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE"}>
-            <div className="bg-gray-50 min-h-screen font-sans text-slate-800 relative">
+        <div className="bg-gray-50 min-h-screen font-sans text-slate-800 relative">
 
-                {/* --- Session Manager --- */}
-                <UserSessionManager
-                    currentData={getCurrentState()}
-                    onLoad={loadState}
-                    isDirty={isDirty}
+            {/* --- Session Manager --- */}
+            <UserSessionManager
+                currentData={getCurrentState()}
+                onLoad={loadState}
+                isDirty={isDirty}
+                user={user}
+                onLogin={login}
+                onLogout={handleLogout}
+            />
+
+            {/* --- Guest Mode Banner --- */}
+            {!user && showGuestBanner && !hasLoggedOut && (
+                <GuestBanner
+                    onLogin={login}
+                    onDismiss={() => setShowGuestBanner(false)}
                 />
+            )}
 
+            {hasLoggedOut ? (
+                <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 animate-in fade-in zoom-in duration-300">
+                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center max-w-md w-full">
+                        <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <LogOut className="w-8 h-8" />
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-800 mb-2">You have logged out</h2>
+                        <p className="text-slate-600 mb-6">
+                            Thank you for using the Rental Expense Forecaster. Your session has ended.
+                        </p>
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                        >
+                            <RefreshCw className="w-5 h-5" /> Refresh to Start New Session
+                        </button>
+                    </div>
+                </div>
+            ) : (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-8">
 
                     {/* --- Header --- */}
@@ -445,7 +548,7 @@ const RentalCalculator = () => {
                             <div className="flex gap-2">
                                 <select
                                     value={analysisStartMonth}
-                                    onChange={(e) => setAnalysisStartMonth(Number(e.target.value))}
+                                    onChange={(e) => { setAnalysisStartMonth(Number(e.target.value)); setIsDirty(true); }}
                                     className="w-full px-2 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                                 >
                                     {monthNames.map((m, i) => (
@@ -455,7 +558,7 @@ const RentalCalculator = () => {
                                 <input
                                     type="number"
                                     value={analysisStartYear}
-                                    onChange={(e) => setAnalysisStartYear(Number(e.target.value))}
+                                    onChange={(e) => { setAnalysisStartYear(Number(e.target.value)); setIsDirty(true); }}
                                     className="w-24 px-2 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                                     placeholder="Year"
                                 />
@@ -469,7 +572,7 @@ const RentalCalculator = () => {
                             </label>
                             <div className="relative">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
-                                <input type="number" value={initialMortgage} onChange={(e) => setInitialMortgage(Number(e.target.value))}
+                                <input type="number" value={initialMortgage} onChange={(e) => { setInitialMortgage(Number(e.target.value)); setIsDirty(true); }}
                                     className="w-full pl-8 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
                             </div>
                         </div>
@@ -479,7 +582,7 @@ const RentalCalculator = () => {
                                 <Clock className="w-4 h-4" /> Forecast Duration
                             </label>
                             <div className="relative">
-                                <input type="number" min="1" max="10" value={forecastYears} onChange={(e) => setForecastYears(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                                <input type="number" min="1" max="10" value={forecastYears} onChange={(e) => { setForecastYears(Math.max(1, Math.min(10, parseInt(e.target.value) || 1))); setIsDirty(true); }}
                                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
                                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">Years</span>
                             </div>
@@ -491,7 +594,7 @@ const RentalCalculator = () => {
                             </label>
                             <div className="relative">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
-                                <input type="number" value={vacancyUtilities} onChange={(e) => setVacancyUtilities(Number(e.target.value))}
+                                <input type="number" value={vacancyUtilities} onChange={(e) => { setVacancyUtilities(Number(e.target.value)); setIsDirty(true); }}
                                     className="w-full pl-8 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
                             </div>
                         </div>
@@ -788,133 +891,134 @@ const RentalCalculator = () => {
                             </div>
                         )}
                     </div>
-                </div>
 
-                {/* --- Generic Edit Modal --- */}
-                {modalConfig.isOpen && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-                            <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                                <h3 className="font-bold text-slate-800">
-                                    {modalConfig.type === 'repair' && 'Add Repair Expense'}
-                                    {modalConfig.type === 'utility' && 'Edit Utilities'}
-                                    {modalConfig.type === 'mortgage' && 'Update Base Mortgage'}
-                                    {modalConfig.type === 'moveOut' && 'Estimated Turnover Costs'}
-                                    {modalConfig.type !== 'moveOut' && <span className="block text-xs text-slate-500 font-normal mt-1">{getFullDateLabel(modalConfig.monthIndex)}</span>}
-                                </h3>
-                                <button onClick={() => setModalConfig({ ...modalConfig, isOpen: false })} className="text-slate-400 hover:text-slate-600">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                            <div className="p-6 space-y-4">
 
-                                {/* --- Move Out Cost Breakdown Modal --- */}
-                                {modalConfig.type === 'moveOut' ? (
-                                    <div className="space-y-4">
-                                        <p className="text-sm text-slate-600 mb-4">
-                                            Select anticipated costs for preparing the property for the next tenant.
-                                        </p>
-                                        <div className="space-y-3">
-                                            <div className="flex items-center gap-3">
-                                                <div className="bg-blue-50 p-2 rounded text-blue-600"><CheckSquare className="w-4 h-4" /></div>
-                                                <div className="flex-1">
-                                                    <label className="text-sm font-medium text-slate-700">Professional Cleaning</label>
-                                                </div>
-                                                <div className="w-28 relative">
-                                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
-                                                    <input type="number" value={modalConfig.details.cleaning} onChange={(e) => updateMoveOutDetail('cleaning', e.target.value)}
-                                                        className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
-                                                </div>
-                                            </div>
+                    {/* --- Generic Edit Modal --- */}
+                    {modalConfig.isOpen && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+                                <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                                    <h3 className="font-bold text-slate-800">
+                                        {modalConfig.type === 'repair' && 'Add Repair Expense'}
+                                        {modalConfig.type === 'utility' && 'Edit Utilities'}
+                                        {modalConfig.type === 'mortgage' && 'Update Base Mortgage'}
+                                        {modalConfig.type === 'moveOut' && 'Estimated Turnover Costs'}
+                                        {modalConfig.type !== 'moveOut' && <span className="block text-xs text-slate-500 font-normal mt-1">{getFullDateLabel(modalConfig.monthIndex)}</span>}
+                                    </h3>
+                                    <button onClick={() => setModalConfig({ ...modalConfig, isOpen: false })} className="text-slate-400 hover:text-slate-600">
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                                <div className="p-6 space-y-4">
 
-                                            <div className="flex items-center gap-3">
-                                                <div className="bg-blue-50 p-2 rounded text-blue-600"><CheckSquare className="w-4 h-4" /></div>
-                                                <div className="flex-1">
-                                                    <label className="text-sm font-medium text-slate-700">Carpet Cleaning</label>
+                                    {/* --- Move Out Cost Breakdown Modal --- */}
+                                    {modalConfig.type === 'moveOut' ? (
+                                        <div className="space-y-4">
+                                            <p className="text-sm text-slate-600 mb-4">
+                                                Select anticipated costs for preparing the property for the next tenant.
+                                            </p>
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-blue-50 p-2 rounded text-blue-600"><CheckSquare className="w-4 h-4" /></div>
+                                                    <div className="flex-1">
+                                                        <label className="text-sm font-medium text-slate-700">Professional Cleaning</label>
+                                                    </div>
+                                                    <div className="w-28 relative">
+                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                        <input type="number" value={modalConfig.details.cleaning} onChange={(e) => updateMoveOutDetail('cleaning', e.target.value)}
+                                                            className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
+                                                    </div>
                                                 </div>
-                                                <div className="w-28 relative">
-                                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
-                                                    <input type="number" value={modalConfig.details.carpet} onChange={(e) => updateMoveOutDetail('carpet', e.target.value)}
-                                                        className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
-                                                </div>
-                                            </div>
 
-                                            <div className="flex items-center gap-3">
-                                                <div className="bg-blue-50 p-2 rounded text-blue-600"><Key className="w-4 h-4" /></div>
-                                                <div className="flex-1">
-                                                    <label className="text-sm font-medium text-slate-700">Re-Keying</label>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-blue-50 p-2 rounded text-blue-600"><CheckSquare className="w-4 h-4" /></div>
+                                                    <div className="flex-1">
+                                                        <label className="text-sm font-medium text-slate-700">Carpet Cleaning</label>
+                                                    </div>
+                                                    <div className="w-28 relative">
+                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                        <input type="number" value={modalConfig.details.carpet} onChange={(e) => updateMoveOutDetail('carpet', e.target.value)}
+                                                            className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
+                                                    </div>
                                                 </div>
-                                                <div className="w-28 relative">
-                                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
-                                                    <input type="number" value={modalConfig.details.rekey} onChange={(e) => updateMoveOutDetail('rekey', e.target.value)}
-                                                        className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
-                                                </div>
-                                            </div>
 
-                                            <div className="flex items-center gap-3">
-                                                <div className="bg-blue-50 p-2 rounded text-blue-600"><Wrench className="w-4 h-4" /></div>
-                                                <div className="flex-1">
-                                                    <label className="text-sm font-medium text-slate-700">General Repairs</label>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-blue-50 p-2 rounded text-blue-600"><Key className="w-4 h-4" /></div>
+                                                    <div className="flex-1">
+                                                        <label className="text-sm font-medium text-slate-700">Re-Keying</label>
+                                                    </div>
+                                                    <div className="w-28 relative">
+                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                        <input type="number" value={modalConfig.details.rekey} onChange={(e) => updateMoveOutDetail('rekey', e.target.value)}
+                                                            className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
+                                                    </div>
                                                 </div>
-                                                <div className="w-28 relative">
-                                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
-                                                    <input type="number" value={modalConfig.details.other} onChange={(e) => updateMoveOutDetail('other', e.target.value)}
-                                                        className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
+
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-blue-50 p-2 rounded text-blue-600"><Wrench className="w-4 h-4" /></div>
+                                                    <div className="flex-1">
+                                                        <label className="text-sm font-medium text-slate-700">General Repairs</label>
+                                                    </div>
+                                                    <div className="w-28 relative">
+                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                        <input type="number" value={modalConfig.details.other} onChange={(e) => updateMoveOutDetail('other', e.target.value)}
+                                                            className="w-full pl-5 pr-2 py-1 border border-slate-300 rounded text-sm text-right" placeholder="0" />
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    /* --- Generic Input Modal --- */
-                                    <>
-                                        <div className="space-y-2">
-                                            <label className="block text-sm font-medium text-slate-700">Amount</label>
-                                            <div className="relative">
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
-                                                <input
-                                                    type="number"
-                                                    value={modalConfig.amount}
-                                                    onChange={(e) => setModalConfig({ ...modalConfig, amount: e.target.value })}
-                                                    className="w-full pl-8 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                                                    placeholder="0.00"
-                                                    autoFocus
-                                                />
                                             </div>
                                         </div>
-                                        {modalConfig.type === 'repair' && (
+                                    ) : (
+                                        /* --- Generic Input Modal --- */
+                                        <>
                                             <div className="space-y-2">
-                                                <label className="block text-sm font-medium text-slate-700">Description</label>
-                                                <textarea
-                                                    value={modalConfig.note}
-                                                    onChange={(e) => setModalConfig({ ...modalConfig, note: e.target.value })}
-                                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none h-24 resize-none"
-                                                    placeholder="e.g., Water Heater Repair"
-                                                />
+                                                <label className="block text-sm font-medium text-slate-700">Amount</label>
+                                                <div className="relative">
+                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+                                                    <input
+                                                        type="number"
+                                                        value={modalConfig.amount}
+                                                        onChange={(e) => setModalConfig({ ...modalConfig, amount: e.target.value })}
+                                                        className="w-full pl-8 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                        placeholder="0.00"
+                                                        autoFocus
+                                                    />
+                                                </div>
                                             </div>
-                                        )}
-                                    </>
-                                )}
+                                            {modalConfig.type === 'repair' && (
+                                                <div className="space-y-2">
+                                                    <label className="block text-sm font-medium text-slate-700">Description</label>
+                                                    <textarea
+                                                        value={modalConfig.note}
+                                                        onChange={(e) => setModalConfig({ ...modalConfig, note: e.target.value })}
+                                                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none h-24 resize-none"
+                                                        placeholder="e.g., Water Heater Repair"
+                                                    />
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
 
-                                <div className="flex gap-3 pt-2">
-                                    <button
-                                        onClick={() => setModalConfig({ ...modalConfig, isOpen: false })}
-                                        className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={saveModalData}
-                                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-sm"
-                                    >
-                                        Save Changes
-                                    </button>
+                                    <div className="flex gap-3 pt-2">
+                                        <button
+                                            onClick={() => setModalConfig({ ...modalConfig, isOpen: false })}
+                                            className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={saveModalData}
+                                            className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-sm"
+                                        >
+                                            Save Changes
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                )}
-            </div>
-        </GoogleOAuthProvider>
+                    )}
+                </div>
+            )}
+        </div>
     );
 };
 

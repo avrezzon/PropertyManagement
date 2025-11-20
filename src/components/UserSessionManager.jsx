@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useGoogleLogin, googleLogout } from '@react-oauth/google';
 import axios from 'axios';
 import { Save, Upload, Download, LogIn, LogOut, User, FileJson, AlertCircle } from 'lucide-react';
 
-const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess, onLogout }) => {
+const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLogin, onLogout }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [successMsg, setSuccessMsg] = useState(null);
-    const [userProfile, setUserProfile] = useState(null);
 
     // Clear messages after 3 seconds
     useEffect(() => {
@@ -21,53 +19,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
     }, [successMsg, error]);
 
     // --- Google Auth ---
-    const login = useGoogleLogin({
-        onSuccess: async (tokenResponse) => {
-            console.log('Google Login Success - Token Response:', tokenResponse);
-            try {
-                console.log('Fetching user info...');
-                const userInfo = await axios.get(
-                    'https://www.googleapis.com/oauth2/v3/userinfo',
-                    { headers: { Authorization: `Bearer ${tokenResponse.access_token}` } },
-                );
-                console.log('User Info Fetched:', userInfo.data);
-
-                // Pass both the token and the user info up to the parent
-                onLoginSuccess({
-                    token: tokenResponse,
-                    profile: userInfo.data
-                });
-            } catch (error) {
-                console.error('Failed to fetch user info:', error);
-            }
-        },
-        onError: error => console.error('Google Login Failed:', error),
-        scope: 'https://www.googleapis.com/auth/drive.file profile email',
-    });
-
-    useEffect(() => {
-        if (user) {
-            axios
-                .get(`https://www.googleapis.com/oauth2/v1/userinfo?access_token=${user.access_token}`, {
-                    headers: {
-                        Authorization: `Bearer ${user.access_token}`,
-                        Accept: 'application/json'
-                    }
-                })
-                .then((res) => {
-                    setUserProfile(res.data);
-                })
-                .catch((err) => console.log(err));
-        } else {
-            setUserProfile(null);
-        }
-    }, [user]);
-
-    const handleLogout = () => {
-        googleLogout();
-        onLogout();
-        setSuccessMsg('Logged out successfully');
-    };
+    // Login and Logout are now handled by parent via onLogin and onLogout props
 
     // --- Drive API ---
     const saveToDrive = async () => {
@@ -84,7 +36,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
             const searchResponse = await axios.get(
                 'https://www.googleapis.com/drive/v3/files',
                 {
-                    headers: { Authorization: `Bearer ${user.access_token}` },
+                    headers: { Authorization: `Bearer ${user.token.access_token}` },
                     params: {
                         q: "name = 'rental_forecast_config.json' and trashed = false",
                         spaces: 'drive',
@@ -98,11 +50,11 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                 // Update existing
                 const fileId = files[0].id;
                 await axios.patch(
-                    `https://www.googleapis.com/drive/v3/files/${fileId}?uploadType=media`,
+                    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
                     fileContent,
                     {
                         headers: {
-                            Authorization: `Bearer ${user.access_token}`,
+                            Authorization: `Bearer ${user.token.access_token}`,
                             'Content-Type': 'application/json',
                         },
                     }
@@ -118,14 +70,18 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
                     form,
                     {
-                        headers: { Authorization: `Bearer ${user.access_token}` },
+                        headers: { Authorization: `Bearer ${user.token.access_token}` },
                     }
                 );
                 setSuccessMsg('New session file created in Drive!');
             }
         } catch (err) {
-            console.error(err);
+            console.error("Google Drive Save Failed:", err);
             setError('Failed to save to Drive');
+            if (window.confirm("Failed to save to Drive. Would you like to download a local backup?")) {
+                downloadJson();
+            }
+            throw err; // Re-throw to handle in caller if needed
         } finally {
             setLoading(false);
         }
@@ -139,7 +95,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
             const searchResponse = await axios.get(
                 'https://www.googleapis.com/drive/v3/files',
                 {
-                    headers: { Authorization: `Bearer ${user.access_token}` },
+                    headers: { Authorization: `Bearer ${user.token.access_token}` },
                     params: {
                         q: "name = 'rental_forecast_config.json' and trashed = false",
                         spaces: 'drive',
@@ -155,7 +111,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                 const fileResponse = await axios.get(
                     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
                     {
-                        headers: { Authorization: `Bearer ${user.access_token}` },
+                        headers: { Authorization: `Bearer ${user.token.access_token}` },
                     }
                 );
                 onLoad(fileResponse.data);
@@ -168,6 +124,33 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
             setError('Failed to load from Drive');
         } finally {
             setLoading(false);
+        }
+    };
+
+    // --- Auto-Load on Login ---
+    useEffect(() => {
+        if (user) {
+            loadFromDrive();
+        }
+    }, [user]);
+
+    // --- Auto-Save on Logout ---
+    const handleLogoutClick = async () => {
+        if (user) {
+            setLoading(true); // Show saving state
+            try {
+                await saveToDrive();
+            } catch (error) {
+                // Error already handled in saveToDrive (popup)
+                // We proceed to logout anyway or could stop?
+                // User request says "Auto-save on Logout", usually implies "Save then Logout"
+                // If save fails, we gave them a backup option.
+            } finally {
+                setLoading(false);
+                onLogout();
+            }
+        } else {
+            onLogout();
         }
     };
 
@@ -230,7 +213,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                 {user ? (
                     <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
                         <User className="w-4 h-4" />
-                        <span className="font-medium">{userProfile ? `Hi, ${userProfile.given_name || userProfile.name}` : 'Logged In'}</span>
+                        <span className="font-medium">{user.profile ? `Hi, ${user.profile.given_name || user.profile.name}` : 'Logged In'}</span>
                     </div>
                 ) : (
                     <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
@@ -243,6 +226,11 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                 {loading && <span className="text-xs text-blue-600 animate-pulse">Syncing...</span>}
                 {error && <span className="text-xs text-rose-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {error}</span>}
                 {successMsg && <span className="text-xs text-emerald-600">{successMsg}</span>}
+                {!loading && !error && !successMsg && isDirty && (
+                    <span className="text-xs text-amber-600 flex items-center gap-1 font-medium">
+                        <AlertCircle className="w-3 h-3" /> Unsaved Changes
+                    </span>
+                )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -263,7 +251,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                             <Download className="w-4 h-4" /> Load
                         </button>
                         <button
-                            onClick={handleLogout}
+                            onClick={handleLogoutClick}
                             className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-sm font-medium hover:bg-rose-100 transition-colors ml-2"
                         >
                             <LogOut className="w-4 h-4" /> Logout
@@ -283,7 +271,7 @@ const UserSessionManager = ({ currentData, onLoad, isDirty, user, onLoginSuccess
                             <input type="file" accept=".json" onChange={uploadJson} className="hidden" />
                         </label>
                         <button
-                            onClick={() => login()}
+                            onClick={() => onLogin()}
                             className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white border border-blue-700 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors ml-2 shadow-sm"
                         >
                             <LogIn className="w-4 h-4" /> Login with Google
